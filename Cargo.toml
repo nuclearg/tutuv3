@@ -1,6 +1,7 @@
 [package]
-name = "tutuv3"
+name = "tutu"
 version = "0.1.0"
 authors = ["enji.lj <enji.lj@taobao.com>"]
 
 [dependencies]
+rand = "0.4.0"
