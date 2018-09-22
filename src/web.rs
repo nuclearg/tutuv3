@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::io::*;
 use std::net::{Shutdown, TcpListener, TcpStream};
 
-pub fn start(host: &str, port: &str, globals: &mut BotGlobals) {
+pub fn start(host: String, port: String, globals: &mut BotGlobals) {
     let listener = TcpListener::bind(format!("{}:{}", host, port)).unwrap();
 
     // handle tcp socket
@@ -54,7 +54,7 @@ impl HttpResponse {
 
 fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest> {
     // 正常应该读出 header 之后取其中的 Content-Length 判断报文总长度再循环读出来，太麻烦了我不想写，先sleep一段时间等字节都进到网络缓冲区再读出来
-    thread::sleep(time::Duration::from_millis(50));
+    thread::sleep(time::Duration::from_millis(200));
 
     // 懒得管那些 http 协议了，直接把 post 的报文体抓出来，出错就错了反正也无所谓
     let mut buf = [0; 2048];
@@ -106,10 +106,11 @@ fn handle_http_request(http_req: &HttpRequest, globals: &mut BotGlobals) -> Resu
     if bot_req.is_none() {
         return HttpResponse::empty();
     }
-    let bot_req = bot_req.unwrap();
+    let mut bot_req = bot_req.unwrap();
+    println!("{:?}", bot_req);
 
     // handle
-    let bot_resps = bot::process_request(&bot_req, globals);
+    let bot_resps = bot::process_request(&mut bot_req, globals);
     println!("{:?}", bot_resps);
 
     // build http response

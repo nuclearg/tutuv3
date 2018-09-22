@@ -1,7 +1,8 @@
 [package]
-name = "tutu"
+name = "tutuv3"
 version = "0.1.0"
 authors = ["enji.lj <enji.lj@taobao.com>"]
 
 [dependencies]
-rand = "0.4.0"
+mysql = "*"
+url = "1.7.1"

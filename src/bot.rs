@@ -1,4 +1,11 @@
+use db;
+use db::DbInfo;
 use std::collections::HashMap;
+
+const PIC_START: &str = "[图片=";
+const PIC_END: &str = "/]";
+const PIC_START_LEN: usize = 8;
+const PIC_END_LEN: usize = 2;
 
 #[derive(Debug)]
 pub struct BotRequest {
@@ -8,8 +15,10 @@ pub struct BotRequest {
     group_id: String,
     is_in_group: bool,
 
-    cmd_arg: String,
-    image: String,
+    word: String,
+    pic: String,
+
+    db: DbInfo,
 }
 
 #[derive(Debug)]
@@ -19,7 +28,7 @@ enum BotRequestType {
     Help,
     HelpAdmin,
     About,
-    PushImg,
+    RecordPrevImg,
     Set,
     Query,
     Random,
@@ -29,24 +38,28 @@ enum BotRequestType {
     Clean,
 }
 
+#[derive(Debug)]
 struct BotSession {
-    prev_image: String,
+    prev_pic: String,
 }
 
+#[derive(Debug)]
 pub struct BotGlobals {
     admin_id: String,
     sessions: HashMap<String, BotSession>,
+    db_user: String,
+    db_pwd: String,
 }
 
 impl BotGlobals {
-    pub fn new(admin_id: String) -> BotGlobals {
-        return BotGlobals { admin_id, sessions: HashMap::new() };
+    pub fn new(admin_id: String, db_user: String, db_pwd: String) -> BotGlobals {
+        return BotGlobals { admin_id, sessions: HashMap::new(), db_user, db_pwd };
     }
 }
 
 impl BotRequest {
     pub fn new(params: &HashMap<String, String>, globals: &BotGlobals) -> BotRequest {
-        let mut message = get(&params, "Message");
+        let message = get(&params, "Message");
         let sender_id = get(&params, "QQ");
         let group_id = get(&params, "ExternalId");
         let bot_self_id = get(&params, "RobotQQ");
@@ -60,58 +73,65 @@ impl BotRequest {
         // if in group, handle @tutu messages only
         let is_in_group = !group_id.is_empty();
         let mut is_someone_at_tutu = false;
-        if is_in_group {
-            let bot_self_id = format!("[@{}] ", bot_self_id);
-            let bot_self_name = format!("@{} ", bot_self_name);
+        let message = match is_in_group {
+            true => {
+                let bot_self_id = format!("[@{}] ", bot_self_id);
+                let bot_self_name = format!("@{} ", bot_self_name);
 
-            // someone @tutu
-            if message.contains(bot_self_id.as_str()) || message.contains(bot_self_name.as_str()) {
-                is_someone_at_tutu = true;
+                // someone @tutu
+                let mut message = message;
+                if message.contains(&bot_self_id) || message.contains(&bot_self_name) {
+                    is_someone_at_tutu = true;
 
-                // remote [@tutu] str
-                message = message.replace(bot_self_id.as_str(), "");
-                message = message.replace(bot_self_name.as_str(), "");
+                    // remote [@tutu] str
+                    message = message.replace(&bot_self_id, "");
+                    message = message.replace(&bot_self_name, "");
+                }
+
+                message
             }
-        }
+            false => message
+        };
 
         // parse image
-        let is_contain_images = false;
-        // TODO
-        let image = String::new();
+        let (pic, text) = parse_pics(&message);
+        let (cmd, mut word) = parse_cmd(&text);
 
         // parse command
-        let message = message.trim().to_lowercase();
-        let message = message.as_ref();
-        let (req_type, cmd_arg) = if is_in_group {
+        let req_type = if is_in_group {
             if is_someone_at_tutu {
-                match message {
-                    "help" => (BotRequestType::Help, String::new()),
-                    "about" => (BotRequestType::About, String::new()),
-                    "set" => (BotRequestType::Set, String::new()),
-                    "random" => (BotRequestType::Random, String::new()),
-                    _ => (BotRequestType::Query, String::new()),
+                match cmd.as_str() {
+                    "help" => BotRequestType::Help,
+                    "about" => BotRequestType::About,
+                    "set" => BotRequestType::Set,
+                    "random" => BotRequestType::Random,
+                    _ => if pic.is_empty() {
+                        word = cmd;
+                        BotRequestType::Query
+                    } else { BotRequestType::RecordPrevImg }
                 }
             } else {
-                (BotRequestType::PushImg, String::new())
+                BotRequestType::RecordPrevImg
             }
         } else {
             if sender_id == globals.admin_id {
-                match message {
-                    "help" => (BotRequestType::HelpAdmin, String::new()),
-                    "about" => (BotRequestType::About, String::new()),
-                    "set" => (BotRequestType::Set, String::new()),
-                    "random" => (BotRequestType::Random, String::new()),
-                    "delete" => (BotRequestType::Delete, String::new()),
-                    "replace" => (BotRequestType::Replace, String::new()),
-                    "clean" => (BotRequestType::Clean, String::new()),
-                    _ => if is_contain_images { (BotRequestType::PushImg, String::new()) } else { (BotRequestType::Query, String::new()) },
+                match cmd.as_str() {
+                    "help" => BotRequestType::HelpAdmin,
+                    "about" => BotRequestType::About,
+                    "set" => BotRequestType::Set,
+                    "random" => BotRequestType::Random,
+                    "delete" => BotRequestType::Delete,
+                    "replace" => BotRequestType::Replace,
+                    "clean" => BotRequestType::Clean,
+                    _ => if pic.is_empty() {
+                        word = cmd;
+                        BotRequestType::Query
+                    } else { BotRequestType::RecordPrevImg }
                 }
             } else {
                 return BotRequest::empty();
             }
         };
-
-        println!("{}, {:?}", message, req_type);
 
         return BotRequest {
             req_type,
@@ -120,12 +140,43 @@ impl BotRequest {
             group_id,
             is_in_group,
 
-            cmd_arg,
-            image,
+            word,
+            pic,
+
+            db: DbInfo::new(&globals.db_user, &globals.db_pwd),
         };
 
         fn get(map: &HashMap<String, String>, k: &str) -> String {
             return if map.contains_key(k) { map[k].clone() } else { String::new() };
+        }
+
+        fn parse_pics(message: &str) -> (String, String) {
+            let mut image = String::new();
+
+            let mut text = String::from(message);
+            while text.contains(PIC_START) && text.contains(PIC_END) {
+                let pos_start = text.find(PIC_START).unwrap();
+                let pos_end = text.find(PIC_END).unwrap();
+
+                if pos_end < pos_start {
+                    return (image, String::new());
+                }
+
+                image = String::from(&text[pos_start + PIC_START_LEN..pos_end]);
+                text = format!("{}{}", &text[0..pos_start], &text[pos_end + PIC_END_LEN..]);
+            }
+
+            return (image, text);
+        }
+        fn parse_cmd(text: &str) -> (String, String) {
+            let text = text.trim();
+            let pos = text.find(" ");
+            if pos.is_none() {
+                return (String::from(text), String::new());
+            }
+            return (
+                String::from(&text[0..pos.unwrap()]),
+                String::from(text[pos.unwrap() + 1..].trim()));
         }
     }
 
@@ -137,8 +188,10 @@ impl BotRequest {
             group_id: String::new(),
             is_in_group: false,
 
-            cmd_arg: String::new(),
-            image: String::new(),
+            word: String::new(),
+            pic: String::new(),
+
+            db: DbInfo::empty(),
         };
     }
 }
@@ -156,7 +209,29 @@ pub enum BotResponseType {
     SendClusterMessage,
 }
 
-pub fn process_request(req: &BotRequest, globals: &mut BotGlobals) -> Vec<BotResponse> {
+impl BotResponse {
+    fn new(text: String, req: &BotRequest) -> BotResponse {
+        if req.is_in_group {
+            return BotResponse {
+                resp_type: BotResponseType::SendClusterMessage,
+                target_id: req.group_id.clone(),
+                text,
+            };
+        } else {
+            return BotResponse {
+                resp_type: BotResponseType::SendMessage,
+                target_id: req.sender_id.clone(),
+                text,
+            };
+        }
+    }
+
+    fn simple(text: String, req: &BotRequest) -> Vec<BotResponse> {
+        return vec!(BotResponse::new(text, req));
+    }
+}
+
+pub fn process_request(req: &mut BotRequest, globals: &mut BotGlobals) -> Vec<BotResponse> {
     let session_key = if req.is_in_group {
         format!("g{}", req.group_id)
     } else {
@@ -164,48 +239,32 @@ pub fn process_request(req: &BotRequest, globals: &mut BotGlobals) -> Vec<BotRes
     };
 
     if !globals.sessions.contains_key(session_key.as_str()) {
-        globals.sessions.insert(session_key.clone(), BotSession { prev_image: String::new() });
+        globals.sessions.insert(session_key.clone(), BotSession { prev_pic: String::new() });
     }
-
     let mut session = globals.sessions.get_mut(&session_key).unwrap();
 
+    if req.pic.is_empty() {
+        req.pic = session.prev_pic.clone();
+    }
+
     let req_type = &req.req_type;
-    println!("{:?}", req);
     return match req_type {
         BotRequestType::Ignore => vec!(),
-        BotRequestType::Help => simple(handle_help(), &req),
-        BotRequestType::HelpAdmin => simple(handle_help_admin(), &req),
-        BotRequestType::About => simple(handle_about(), &req),
-        BotRequestType::PushImg => handle_push_img(&req, &mut session),
-        BotRequestType::Set => simple(handle_set(&req, &session), &req),
+        BotRequestType::Help => BotResponse::simple(handle_help(), &req),
+        BotRequestType::HelpAdmin => BotResponse::simple(handle_help_admin(), &req),
+        BotRequestType::About => BotResponse::simple(handle_about(), &req),
+        BotRequestType::RecordPrevImg => handle_record_prev_img(&req, &mut session),
+        BotRequestType::Set => BotResponse::simple(handle_set(&req), &req),
         BotRequestType::Query => handle_query(&req),
-        BotRequestType::Random => simple(handle_random(&req), &req),
-        BotRequestType::Delete => simple(handle_delete(&req, &session), &req),
-        BotRequestType::Replace => simple(handle_replace(&req, &session), &req),
-        BotRequestType::Clean => simple(handle_clean(&req), &req),
+        BotRequestType::Random => BotResponse::simple(handle_random(&req), &req),
+        BotRequestType::Delete => BotResponse::simple(handle_delete(&req), &req),
+        BotRequestType::Replace => BotResponse::simple(handle_replace(&req), &req),
+        BotRequestType::Clean => BotResponse::simple(handle_clean(&req), &req),
     };
 }
 
-fn simple(msg: String, req: &BotRequest) -> Vec<BotResponse> {
-    if req.is_in_group {
-        return vec!(BotResponse {
-            resp_type: BotResponseType::SendClusterMessage,
-            target_id: req.group_id.clone(),
-            text: msg,
-        });
-    } else {
-        return vec!(BotResponse {
-            resp_type: BotResponseType::SendMessage,
-            target_id: req.sender_id.clone(),
-            text: msg,
-        });
-    }
-}
-
 fn handle_help() -> String {
-    return String::from("
-=============
-tutu bot v3.0
+    return String::from("tutu bot v3.0
 =============
 * help
   显示本说明
@@ -224,9 +283,7 @@ tutu bot v3.0
 }
 
 fn handle_help_admin() -> String {
-    return String::from("
-=======================
-tutu bot admin commands
+    return String::from("tutu bot admin commands
 =======================
 * help
   显示本说明
@@ -252,48 +309,99 @@ tutu bot admin commands
 }
 
 fn handle_about() -> String {
-    return String::from("
-===========
-about tutu
+    return String::from("about tutu
 ==========
 2018-09-16 v3.0 rust
 2017-08-13 v2.0 spring-boot
 2017-05-21 v1.0 python
-
-github: https://github.com/nuclearg/tutuv3
-
  "
     );
 }
 
-fn handle_push_img(req: &BotRequest, session: &mut BotSession) -> Vec<BotResponse> {
-    if req.image.len() > 0 {
-        session.prev_image = req.image.clone();
+fn handle_record_prev_img(req: &BotRequest, session: &mut BotSession) -> Vec<BotResponse> {
+    if !req.pic.is_empty() {
+        session.prev_pic = req.pic.clone();
     }
     return vec!();
 }
 
-fn handle_set(req: &BotRequest, session: &BotSession) -> String {
-    return String::from("");
+fn handle_set(req: &BotRequest) -> String {
+    if req.pic.is_empty() {
+        return String::from("set fail: no pic");
+    }
+    if req.word.is_empty() {
+        return String::from("set fail: no text");
+    }
+
+    let result = db::append_word(&req.pic, &req.word, &req.db);
+    return match result {
+        Ok(_) => String::from("set ok"),
+        Err(t) => format!("set fail: {}", t)
+    };
 }
 
 fn handle_query(req: &BotRequest) -> Vec<BotResponse> {
-    return vec!();
+    if req.word.is_empty() {
+        return BotResponse::simple(String::from("query fail: no text"), req);
+    }
+
+    let result = db::query_pic(&req.word, &req.db);
+    return match result {
+        Ok(t) => if t.is_empty() {
+            BotResponse::simple(String::from("query fail: not found"), req)
+        } else {
+            t.iter()
+                .map(|pic| build_pic_output(pic))
+                .map(|text| BotResponse::new(text, req))
+                .collect()
+        }
+        Err(t) => BotResponse::simple(format!("query fail: {}", t), req)
+    };
 }
 
 fn handle_random(req: &BotRequest) -> String {
-    return String::from("");
+    let result = db::random_pic(&req.db);
+    return match result {
+        Ok(t) => build_pic_output(&t),
+        Err(t) => format!("random fail: {}", t)
+    };
 }
 
-fn handle_delete(req: &BotRequest, session: &BotSession) -> String {
-    return String::from("");
+fn handle_delete(req: &BotRequest) -> String {
+    if req.pic.is_empty() {
+        return String::from("delete fail: no pic");
+    }
+
+    let result = db::delete_pic(&req.pic, &req.db);
+    return match result {
+        Ok(_) => String::from("delete ok"),
+        Err(t) => format!("delete fail: {}", t)
+    };
 }
 
-fn handle_replace(req: &BotRequest, session: &BotSession) -> String {
-    return String::from("");
+fn handle_replace(req: &BotRequest) -> String {
+    if req.pic.is_empty() {
+        return String::from("replace fail: no pic");
+    }
+    if req.word.is_empty() {
+        return String::from("replace fail: no text");
+    }
+
+    let result = db::replace_word(&req.pic, &req.word, &req.db);
+    return match result {
+        Ok(_) => String::from("replace ok"),
+        Err(t) => format!("replace fail: {}", t)
+    };
 }
 
 fn handle_clean(req: &BotRequest) -> String {
-    return String::from("");
+    let result = db::clean(&req.db);
+    return match result {
+        Ok(t) => format!("clean ok: {}", t),
+        Err(t) => format!("clean fail: {}", t)
+    };
 }
 
+fn build_pic_output(pic: &str) -> String {
+    return format!("{}{}{}", PIC_START, pic, PIC_END);
+}
