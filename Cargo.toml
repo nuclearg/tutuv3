@@ -6,3 +6,4 @@ authors = ["enji.lj <enji.lj@taobao.com>"]
 [dependencies]
 mysql = "*"
 url = "1.7.1"
+

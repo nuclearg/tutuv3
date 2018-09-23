@@ -35,6 +35,8 @@ enum BotRequestType {
 
     Delete,
     Replace,
+    Info,
+    Count,
     Clean,
 }
 
@@ -122,6 +124,8 @@ impl BotRequest {
                     "random" => BotRequestType::Random,
                     "delete" => BotRequestType::Delete,
                     "replace" => BotRequestType::Replace,
+                    "info" => BotRequestType::Info,
+                    "count" => BotRequestType::Count,
                     "clean" => BotRequestType::Clean,
                     _ => if pic.is_empty() {
                         word = cmd;
@@ -259,6 +263,8 @@ pub fn process_request(req: &mut BotRequest, globals: &mut BotGlobals) -> Vec<Bo
         BotRequestType::Random => BotResponse::simple(handle_random(&req), &req),
         BotRequestType::Delete => BotResponse::simple(handle_delete(&req), &req),
         BotRequestType::Replace => BotResponse::simple(handle_replace(&req), &req),
+        BotRequestType::Info => BotResponse::simple(handle_info(&req), &req),
+        BotRequestType::Count => BotResponse::simple(handle_count(&req), &req),
         BotRequestType::Clean => BotResponse::simple(handle_clean(&req), &req),
     };
 }
@@ -300,10 +306,14 @@ fn handle_help_admin() -> String {
 
 * replace
   替换一张图片对应的文字（set命令是追加）
-* delete
-  从数据库中删除前一张图片的信息
 * delete [图片]
   从数据库中删除指定的图片信息
+* info [图片]
+  查询一张图片下挂的所有词
+* count
+  查询现存的图片总数
+* clean
+  删除掉没有被引用的图片文件
  "
     );
 }
@@ -311,7 +321,7 @@ fn handle_help_admin() -> String {
 fn handle_about() -> String {
     return String::from("about tutu
 ==========
-2018-09-16 v3.0 rust
+2018-09-23 v3.0 rust
 2017-08-13 v2.0 spring-boot
 2017-05-21 v1.0 python
  "
@@ -362,7 +372,11 @@ fn handle_query(req: &BotRequest) -> Vec<BotResponse> {
 fn handle_random(req: &BotRequest) -> String {
     let result = db::random_pic(&req.db);
     return match result {
-        Ok(t) => build_pic_output(&t),
+        Ok(t) => if t.is_empty() {
+            format!("random fail: db empty")
+        } else {
+            build_pic_output(&t)
+        },
         Err(t) => format!("random fail: {}", t)
     };
 }
@@ -391,6 +405,26 @@ fn handle_replace(req: &BotRequest) -> String {
     return match result {
         Ok(_) => String::from("replace ok"),
         Err(t) => format!("replace fail: {}", t)
+    };
+}
+
+fn handle_info(req: &BotRequest) -> String {
+    if req.pic.is_empty() {
+        return String::from("info fail: no pic");
+    }
+
+    let result = db::list_pic_words(&req.pic, &req.db);
+    return match result {
+        Ok(t) => format!("info ok: {}", t),
+        Err(t) => format!("info fail: {}", t)
+    };
+}
+
+fn handle_count(req: &BotRequest) -> String {
+    let result = db::count_pic(&req.db);
+    return match result {
+        Ok(t) => format!("count ok: pic={}", t),
+        Err(t) => format!("count fail: {}", t)
     };
 }
 

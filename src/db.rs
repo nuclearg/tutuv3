@@ -71,6 +71,9 @@ pub fn delete_pic(pic: &str, db: &DbInfo) -> Result<(), Error> {
     return match pic_id {
         Some(t) => {
             conn.prep_exec(
+                "DELETE FROM t_pic WHERE id = :pic_id",
+                params!("pic_id" => t))?;
+            conn.prep_exec(
                 "DELETE FROM t_pic_word WHERE id_pic = :pic_id",
                 params!("pic_id" => t))?;
             Ok(())
@@ -131,10 +134,40 @@ pub fn random_pic(db: &DbInfo) -> Result<String, Error> {
     };
 }
 
-pub fn clean(db: &DbInfo) -> Result<String, String> {
-    return Err(String::from("// TODO clean()"));
+pub fn clean(db: &DbInfo) -> Result<String, Error> {
+    let conn = db.conn();
+
+    let pics: Vec<String> = select_list(conn.prep_exec(
+        "SELECT name FROM t_pic",
+        ())?)?;
+
+    return Ok(String::from("// TODO"));
 }
 
+pub fn list_pic_words(pic: &str, db: &DbInfo) -> Result<String, Error> {
+    let conn = db.conn();
+
+    let words: Vec<String> = select_list(conn.prep_exec(
+        "SELECT word
+         FROM t_pic p
+         JOIN t_pic_word j ON j.id_pic = p.id
+         JOIN t_word w ON j.id_word = w.id
+         WHERE p.name = :pic",
+        params!("pic" => pic),
+    )?)?;
+
+    let words = words.join(" ");
+    return Ok(words);
+}
+
+pub fn count_pic(db: &DbInfo) -> Result<u64, Error> {
+    let conn = db.conn();
+
+    let pic_count = select_one(conn.prep_exec(
+        "SELECT count(1) FROM t_pic",
+        ())?)?.unwrap_or(0u64);
+    return Ok(pic_count);
+}
 
 fn find_pic_id_by_pic(pic: &str, conn: &Pool) -> Result<Option<u64>, Error> {
     return select_one(conn.prep_exec(
@@ -161,3 +194,16 @@ fn select_one<T>(result: QueryResult) -> Result<Option<T>, Error>
     };
 }
 
+fn select_list<T>(result: QueryResult) -> Result<Vec<T>, Error>
+    where T: FromValue
+{
+    let mut list = vec!();
+    for row in result {
+        let v = row?.get(0);
+        if v.is_none() {
+            continue;
+        }
+        list.push(v.unwrap());
+    }
+    return Ok(list);
+}
