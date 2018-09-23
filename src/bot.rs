@@ -311,7 +311,7 @@ fn handle_help_admin() -> String {
 * info [图片]
   查询一张图片下挂的所有词
 * count
-  查询现存的图片总数
+  查询各项数据指标
 * clean
   删除掉没有被引用的图片文件
  "
@@ -423,7 +423,7 @@ fn handle_info(req: &BotRequest) -> String {
 fn handle_count(req: &BotRequest) -> String {
     let result = db::count_pic(&req.db);
     return match result {
-        Ok(t) => format!("count ok: pic={}", t),
+        Ok(t) => format!("count ok: {}", t),
         Err(t) => format!("count fail: {}", t)
     };
 }

@@ -2,10 +2,11 @@ extern crate url;
 
 use bot;
 use bot::{BotGlobals, BotRequest};
-use std::{thread, time};
 use std::collections::HashMap;
 use std::io::*;
 use std::net::{Shutdown, TcpListener, TcpStream};
+
+const HEADER_CONTENT_LENGTH: &'static str = "Content-Length: ";
 
 pub fn start(host: String, port: String, globals: &mut BotGlobals) {
     let listener = TcpListener::bind(format!("{}:{}", host, port)).unwrap();
@@ -53,18 +54,9 @@ impl HttpResponse {
 }
 
 fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest> {
-    // 正常应该读出 header 之后取其中的 Content-Length 判断报文总长度再循环读出来，太麻烦了我不想写，先sleep一段时间等字节都进到网络缓冲区再读出来
-    thread::sleep(time::Duration::from_millis(200));
+    let body = read_http_body(stream)?;
 
-    // 懒得管那些 http 协议了，直接把 post 的报文体抓出来，出错就错了反正也无所谓
-    let mut buf = [0; 2048];
-    let size = stream.read(&mut buf)?;
-    let req = String::from_utf8_lossy(&buf[0..size]);
-    let pos = req.find("\r\n\r\n").unwrap_or(req.len() - 4);
-
-    let req = String::from(&req[pos + 4..]);
-    let req = url::form_urlencoded::parse(req.as_bytes());
-
+    let req = url::form_urlencoded::parse(body.as_bytes());
     let mut params = HashMap::new();
     for item in req {
         params.insert(String::from(item.0), String::from(item.1));
@@ -95,7 +87,6 @@ fn handle_http_request(http_req: &HttpRequest, globals: &mut BotGlobals) -> Resu
     let bot_req: Option<BotRequest> = match event {
         "KeepAlive" | "StatusChanged" => None,
         "ReceiveNormalIM" | "ReceiveClusterIM" => {
-            println!("msg: {:?}", http_req.params);
             Some(BotRequest::new(&http_req.params, globals))
         }
         _ => {
@@ -107,18 +98,44 @@ fn handle_http_request(http_req: &HttpRequest, globals: &mut BotGlobals) -> Resu
         return HttpResponse::empty();
     }
     let mut bot_req = bot_req.unwrap();
-    println!("{:?}", bot_req);
 
     // handle
     let bot_resps = bot::process_request(&mut bot_req, globals);
-    println!("{:?}", bot_resps);
 
     // build http response
     let mut body = String::new();
     for bot_resp in bot_resps {
         body.push_str(format!("<&&>{:?}<&>{}<&>{}\r\n", bot_resp.resp_type, bot_resp.target_id, bot_resp.text).as_str());
     }
-    println!("{}", body);
 
     return HttpResponse::new(body);
+}
+
+fn read_http_body(stream: &mut TcpStream) -> Result<String> {
+    let mut line = String::new();
+    let mut reader = BufReader::new(stream);
+    let mut content_length = 0usize;
+
+    loop {
+        reader.read_line(&mut line)?;
+
+        if line == "\r\n" {
+            break;
+        }
+
+        if line.starts_with(HEADER_CONTENT_LENGTH) {
+            let xxx = &line[HEADER_CONTENT_LENGTH.len()..line.len() - 2];
+            content_length = xxx.parse::<usize>().unwrap();
+        }
+
+        line.clear();
+    }
+
+    let mut body_bytes = vec!(0u8; content_length);
+    reader.read_exact(&mut body_bytes[..])?;
+    let body = String::from_utf8(body_bytes);
+    return match body {
+        Ok(t) => Ok(t),
+        Err(t) => Err(Error::new(ErrorKind::InvalidData, t.to_string()))
+    };
 }

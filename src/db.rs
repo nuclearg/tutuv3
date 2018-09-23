@@ -207,3 +207,4 @@ fn select_list<T>(result: QueryResult) -> Result<Vec<T>, Error>
     }
     return Ok(list);
 }
+
